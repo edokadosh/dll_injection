@@ -1,20 +1,41 @@
 #include "pch.h"
 #include <stdio.h>
 #include <string.h>
+#include <string>
 
-#define INJECTING_DLL "Z:\\shared\\dll\\injector\\my_awesome_dll.dll"
+const char* INJECTED_DLL_NAME = "Z:\\shared\\dll\\injector\\my_awesome_dll.dll";
 
-#define ERROR_MESSAGE(name) \
-	printf("error: " #name " failed with error code: %d\n", GetLastError()); \
-	getchar(); \
-	return 1;
+std::string GetLastErrorAsString() {
+    DWORD errorCode = GetLastError();
+    if (errorCode == 0) {
+        return std::string();
+    }
+
+    LPSTR messageBuffer = nullptr;
+
+    size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
+
+    std::string message(messageBuffer, size);
+
+    LocalFree(messageBuffer);
+
+    return message;
+}
+
+int PrintErrorAndExit(const char* func_name) {
+    DWORD error_code = GetLastError();
+    printf("error: %s failed with error %s\n", func_name, GetLastErrorAsString());
+    getchar();
+    return 1;
+}
 
 #pragma comment(lib, "advapi32.lib")
 
-BOOL SetPrivilege(
+bool SetPrivilege(
     HANDLE hToken,          // access token handle
     LPCTSTR lpszPrivilege,  // name of privilege to enable/disable
-    BOOL bEnablePrivilege   // to enable or disable privilege
+    bool bEnablePrivilege   // to enable or disable privilege
 ) {
     TOKEN_PRIVILEGES tp;
     LUID luid;
@@ -82,29 +103,42 @@ int main() {
 
 	HANDLE proc = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
 	if (proc == INVALID_HANDLE_VALUE) {
-		ERROR_MESSAGE(OpenProcess)
+        return PrintErrorAndExit("OpenProcess");
 	}
 
-	LPVOID dll_name = VirtualAllocEx(proc, NULL, strlen(INJECTING_DLL)+1, MEM_COMMIT, PAGE_READWRITE);
+    int dll_name_len = strlen(INJECTED_DLL_NAME) + 1;
+
+	LPVOID dll_name = VirtualAllocEx(proc, NULL, dll_name_len, MEM_COMMIT, PAGE_READWRITE);
 
 	if (dll_name == NULL) {
-		ERROR_MESSAGE(VirtualAllocEx)
+        return PrintErrorAndExit("VirtualAllocEx");
 	}
 
-	if (WriteProcessMemory(proc, dll_name, INJECTING_DLL, strlen(INJECTING_DLL) + 1, NULL) == 0) {
-		ERROR_MESSAGE(WriteProcessMemory)
+	if (WriteProcessMemory(proc, dll_name, INJECTED_DLL_NAME, strlen(INJECTED_DLL_NAME) + 1, NULL) == 0) {
+        return PrintErrorAndExit("WriteProcessMemory");
 	}
 
-	LPVOID func_to_run = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
+    HMODULE hModule = GetModuleHandleA("kernel32.dll");
+    if (hModule == NULL) {
+        return PrintErrorAndExit("module_handle");
+    }
+
+	LPVOID func_to_run = GetProcAddress(hModule, "LoadLibraryA");
 	if (func_to_run == NULL) {
-		ERROR_MESSAGE(GetProcAddress)
+        return PrintErrorAndExit("WriteProcessMemory");
 	}
 	
 	HANDLE thread = CreateRemoteThread(proc, NULL, 0, (LPTHREAD_START_ROUTINE)func_to_run, dll_name, NULL, NULL);
 
 	if (thread == NULL) {
-		ERROR_MESSAGE(CreateRemoteThread)
+        return PrintErrorAndExit("CreateRemoteThread");
 	}
+
+    VirtualFreeEx(proc, dll_name, dll_name_len, MEM_RELEASE);
+    CloseHandle(hToken);
+    CloseHandle(proc);
+    CloseHandle(hModule);
+    CloseHandle(thread);
 
 
 	return 0;
